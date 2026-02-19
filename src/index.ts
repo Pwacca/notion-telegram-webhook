@@ -143,8 +143,9 @@ function formatMessage(payload: NotionWebhookPayload): string {
     parts.push(`<b>${escapeHtml(title)}</b>`);
   }
 
-  // Status line
+  // Empty line before status
   if (status) {
+    parts.push("");
     parts.push(`Статус: ${escapeHtml(status)}`);
   }
 
