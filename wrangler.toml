@@ -1,6 +1,7 @@
 name = "notion-telegram-webhook"
 main = "src/index.ts"
 compatibility_date = "2026-02-19"
+account_id = "a562983dfe7675bfebfb2d980bc21182"
 
 [vars]
 PERSONAL_CHAT_ID = "64003764"
