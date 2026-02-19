@@ -1,0 +1,8 @@
+name = "notion-telegram-webhook"
+main = "src/index.ts"
+compatibility_date = "2026-02-19"
+
+[vars]
+PERSONAL_CHAT_ID = "64003764"
+GROUP_CHAT_ID = "-1002374110518"
+GROUP_THREAD_ID = "10427"
