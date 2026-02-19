@@ -1,7 +1,6 @@
 export interface Env {
   TELEGRAM_BOT_TOKEN: string;
   WEBHOOK_SECRET: string;
-  PERSONAL_CHAT_ID: string;
   GROUP_CHAT_ID: string;
   GROUP_THREAD_ID: string;
 }
@@ -33,48 +32,87 @@ interface NotionProperty {
   [key: string]: unknown;
 }
 
+interface NotionPerson {
+  object: string;
+  id: string;
+  name: string;
+  type?: string;
+  person?: { email?: string };
+}
+
+// --- Notion User ID → Telegram username mapping ---
+
+const USER_MAP: Record<string, string> = {
+  // Luka Haikin
+  "1b3d872b-594c-819a-9bac-0002bd327ff7": "Pwacca",
+  // Vahe Kirakosyan
+  "224d872b-594c-8161-b365-0002f5424106": "kirvahe",
+  // Sergey Kurlovich
+  "1e0d872b-594c-81a6-bb93-0002880a133d": "skurlovich",
+  // Mikhail Semenov
+  "537ce164-c88c-45b2-bafb-7ecf49ed5527": "m5s5v",
+  // Дмитрий Сундуков
+  "268072ef-0c99-4c74-97c0-f16e138e0e24": "IamAfroman",
+  // Alina Polinko
+  "27dd872b-594c-8173-974c-000220a3d840": "polinko_alina",
+};
+
+// Fallback: match by name if user ID not in map
+const NAME_MAP: Record<string, string> = {
+  "Luka Haikin": "Pwacca",
+  "Vahe Kirakosyan": "kirvahe",
+  "Sergey Kurlovich": "skurlovich",
+  "Mikhail Semenov": "m5s5v",
+  "Дмитрий Сундуков": "IamAfroman",
+  "Alina Polinko": "polinko_alina",
+  "Pavel Shumkovskii": "pavelhym",
+  "Шумковский Павел": "pavelhym",
+  "Elena Kotlyar": "ekotlyar",
+  "Котляр Елена": "ekotlyar",
+  "Alexander Donskikh": "alexdonskikh",
+  "Донских Александр": "alexdonskikh",
+  "Дмитрий Борисов": "Gallywix",
+  "Dmitry Borisov": "Gallywix",
+};
+
+function resolveUsername(person: NotionPerson): string | null {
+  // Try by Notion user ID first
+  const byId = USER_MAP[person.id];
+  if (byId) return byId;
+
+  // Fallback by name
+  const byName = NAME_MAP[person.name];
+  if (byName) return byName;
+
+  return null;
+}
+
 // --- Property extraction ---
 
-function extractPropertyValue(prop: NotionProperty): string {
-  switch (prop.type) {
-    case "title":
-      return (prop.title as Array<{ plain_text: string }>)
-        ?.map((t) => t.plain_text)
-        .join("") || "";
-    case "rich_text":
-      return (prop.rich_text as Array<{ plain_text: string }>)
-        ?.map((t) => t.plain_text)
-        .join("") || "";
-    case "select":
-      return (prop.select as { name: string } | null)?.name ?? "";
-    case "status":
-      return (prop.status as { name: string } | null)?.name ?? "";
-    case "multi_select":
-      return (prop.multi_select as Array<{ name: string }>)
-        ?.map((s) => s.name)
-        .join(", ") || "";
-    case "date":
-      return (prop.date as { start: string } | null)?.start ?? "";
-    case "people":
-      return (prop.people as Array<{ name: string }>)
-        ?.map((p) => p.name)
-        .join(", ") || "";
-    case "checkbox":
-      return (prop.checkbox as boolean) ? "Yes" : "No";
-    case "number":
-      return String(prop.number ?? "");
-    case "url":
-      return (prop.url as string) ?? "";
-    case "email":
-      return (prop.email as string) ?? "";
-    case "relation":
-      return (prop.relation as Array<{ id: string }>)
-        ?.length
-        ? `${(prop.relation as Array<{ id: string }>).length} linked`
-        : "";
-    default:
-      return "";
+function extractTitle(props: Record<string, NotionProperty>): string {
+  const titleKey = Object.keys(props).find((k) => props[k].type === "title");
+  if (!titleKey) return "Untitled";
+  return (props[titleKey].title as Array<{ plain_text: string }>)
+    ?.map((t) => t.plain_text)
+    .join("") || "Untitled";
+}
+
+function extractStatus(props: Record<string, NotionProperty>): string {
+  const statusProp = props["Status"];
+  if (!statusProp) return "";
+  if (statusProp.type === "status") {
+    return (statusProp.status as { name: string } | null)?.name ?? "";
   }
+  if (statusProp.type === "select") {
+    return (statusProp.select as { name: string } | null)?.name ?? "";
+  }
+  return "";
+}
+
+function extractReviewers(props: Record<string, NotionProperty>): NotionPerson[] {
+  const reviewerProp = props["Reviewer"];
+  if (!reviewerProp || reviewerProp.type !== "people") return [];
+  return (reviewerProp.people as NotionPerson[]) || [];
 }
 
 // --- HTML escaping ---
@@ -86,33 +124,38 @@ function escapeHtml(text: string): string {
     .replace(/>/g, "&gt;");
 }
 
-// --- Message formatting ---
+// --- Message formatting (AID Nightend style) ---
 
 function formatMessage(payload: NotionWebhookPayload): string {
   const props = payload.data.properties;
   const pageUrl = payload.data.url;
 
-  // Find title property
-  const titleKey = Object.keys(props).find((k) => props[k].type === "title");
-  const title = titleKey ? extractPropertyValue(props[titleKey]) : "Untitled";
+  const title = extractTitle(props);
+  const status = extractStatus(props);
+  const reviewers = extractReviewers(props);
 
-  // Format other properties (skip empty and title)
-  const lines: string[] = [];
-  for (const [key, prop] of Object.entries(props)) {
-    if (key === titleKey) continue;
-    const value = extractPropertyValue(prop);
-    if (!value) continue;
-    lines.push(`<b>${escapeHtml(key)}:</b> ${escapeHtml(value)}`);
+  const parts: string[] = [];
+
+  // Title as hyperlink (like AID Nightend)
+  if (pageUrl) {
+    parts.push(`<a href="${pageUrl}">${escapeHtml(title)}</a>`);
+  } else {
+    parts.push(`<b>${escapeHtml(title)}</b>`);
   }
 
-  const parts = [
-    `<b>${escapeHtml(title)}</b>`,
-    "",
-    ...lines,
-  ];
+  // Status line
+  if (status) {
+    parts.push(`Статус: ${escapeHtml(status)}`);
+  }
 
-  if (pageUrl) {
-    parts.push("", `<a href="${pageUrl}">Open in Notion</a>`);
+  // Tag reviewers
+  for (const reviewer of reviewers) {
+    const username = resolveUsername(reviewer);
+    if (username) {
+      parts.push(`@${username}`);
+    } else {
+      parts.push(escapeHtml(reviewer.name));
+    }
   }
 
   return parts.join("\n");
@@ -123,7 +166,7 @@ function formatMessage(payload: NotionWebhookPayload): string {
 async function sendTelegram(
   token: string,
   chatId: string,
-  threadId: string | null,
+  threadId: string,
   text: string,
 ): Promise<void> {
   const url = `https://api.telegram.org/bot${token}/sendMessage`;
@@ -194,25 +237,17 @@ export default {
     // Format message
     const message = formatMessage(payload);
 
-    // Send to both destinations in parallel
-    const results = await Promise.allSettled([
-      sendTelegram(env.TELEGRAM_BOT_TOKEN, env.PERSONAL_CHAT_ID, null, message),
-      sendTelegram(env.TELEGRAM_BOT_TOKEN, env.GROUP_CHAT_ID, env.GROUP_THREAD_ID, message),
-    ]);
-
-    const failures = results.filter((r) => r.status === "rejected");
-
-    if (failures.length === results.length) {
-      // Both failed
-      const errors = failures.map((f) => (f as PromiseRejectedResult).reason);
-      console.error("All Telegram sends failed:", errors);
-      return new Response("All sends failed", { status: 502 });
-    }
-
-    if (failures.length > 0) {
-      // Partial failure
-      const errors = failures.map((f) => (f as PromiseRejectedResult).reason);
-      console.warn("Partial Telegram send failure:", errors);
+    // Send to group chat only
+    try {
+      await sendTelegram(
+        env.TELEGRAM_BOT_TOKEN,
+        env.GROUP_CHAT_ID,
+        env.GROUP_THREAD_ID,
+        message,
+      );
+    } catch (err) {
+      console.error("Telegram send failed:", err);
+      return new Response("Telegram send failed", { status: 502 });
     }
 
     return new Response("OK", { status: 200 });

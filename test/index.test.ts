@@ -1,7 +1,7 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, it, expect } from "vitest";
 
-// Real payload captured from Notion automation
+// Real payload captured from Notion automation (with Reviewer added)
 const REAL_PAYLOAD = {
   source: {
     type: "automation",
@@ -17,76 +17,39 @@ const REAL_PAYLOAD = {
     last_edited_time: "2026-02-19T12:38:00.000Z",
     created_by: { object: "user", id: "1b3d872b-594c-819a-9bac-0002bd327ff7" },
     last_edited_by: { object: "user", id: "00000000-0000-0000-0000-000000000003" },
-    cover: null,
-    icon: { type: "external", external: { url: "https://www.notion.so/icons/checkmark_green.svg" } },
     parent: {
       type: "data_source_id",
       data_source_id: "23e91cc9-11b2-80ec-aef7-000b3009551c",
-      database_id: "23e91cc9-11b2-8014-a279-c5b988a05e1f",
     },
-    archived: false,
-    in_trash: false,
-    is_locked: false,
     properties: {
       "Task name": {
         id: "title",
         type: "title",
-        title: [
-          {
-            type: "text",
-            text: { content: "тест", link: null },
-            annotations: { bold: false, italic: false, strikethrough: false, underline: false, code: false, color: "default" },
-            plain_text: "тест",
-            href: null,
-          },
-        ],
-      },
-      Asignee: {
-        id: "YxM%7B",
-        type: "people",
-        people: [
-          {
-            object: "user",
-            id: "1b3d872b-594c-819a-9bac-0002bd327ff7",
-            name: "Luka Haikin",
-            avatar_url: "https://s3-us-west-2.amazonaws.com/public.notion-static.com/4c8ba85d-7a2f-4156-be9c-7613825f3823/733deaba-3888-483d-80b1-671f18173836.png",
-            type: "person",
-            person: { email: "pwacca@skms.io" },
-          },
-        ],
-      },
-      Reviewer: {
-        id: "dHT%5D",
-        type: "people",
-        people: [],
+        title: [{ type: "text", plain_text: "Отдать Азбуке тикет по airflow", href: null }],
       },
       Status: {
         id: "Q%7Cp%3B",
         type: "status",
-        status: { id: "AWQQ", name: "Briefing", color: "blue" },
+        status: { id: "done", name: "Done", color: "green" },
+      },
+      Reviewer: {
+        id: "dHT%5D",
+        type: "people",
+        people: [
+          {
+            object: "user",
+            id: "224d872b-594c-8161-b365-0002f5424106",
+            name: "Vahe Kirakosyan",
+            type: "person",
+            person: { email: "vk@skms.io" },
+          },
+        ],
       },
     },
     url: "https://www.notion.so/30c91cc911b2800f88b3c19e259aa75b",
     public_url: null,
-    request_id: "d3aae134-2c7b-44e0-99c9-5315d20ded9f",
   },
 };
-
-function makeRequest(options: {
-  method?: string;
-  body?: unknown;
-  secret?: string;
-} = {}): Request {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (options.secret) {
-    headers["X-Webhook-Secret"] = options.secret;
-  }
-  return new Request("http://localhost", {
-    method: options.method ?? "POST",
-    headers,
-    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-  });
-}
 
 describe("Notion Telegram Webhook Worker", () => {
   it("returns 405 for non-POST requests", async () => {
@@ -95,46 +58,60 @@ describe("Notion Telegram Webhook Worker", () => {
   });
 
   it("returns 401 for missing secret header", async () => {
-    const resp = await SELF.fetch(makeRequest({ body: REAL_PAYLOAD }));
+    const resp = await SELF.fetch(new Request("http://localhost", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(REAL_PAYLOAD),
+    }));
     expect(resp.status).toBe(401);
   });
 
   it("returns 401 for wrong secret", async () => {
-    const resp = await SELF.fetch(
-      makeRequest({ body: REAL_PAYLOAD, secret: "wrong-secret" }),
-    );
+    const resp = await SELF.fetch(new Request("http://localhost", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Webhook-Secret": "wrong-secret",
+      },
+      body: JSON.stringify(REAL_PAYLOAD),
+    }));
     expect(resp.status).toBe(401);
   });
 
   it("returns 400 for invalid JSON", async () => {
-    const resp = await SELF.fetch(
-      new Request("http://localhost", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Webhook-Secret": env.WEBHOOK_SECRET,
-        },
-        body: "not-json{{{",
-      }),
-    );
+    const resp = await SELF.fetch(new Request("http://localhost", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Webhook-Secret": env.WEBHOOK_SECRET,
+      },
+      body: "not-json{{{",
+    }));
     expect(resp.status).toBe(400);
   });
 
   it("returns 400 for payload without data.properties", async () => {
-    const resp = await SELF.fetch(
-      makeRequest({ body: { source: {}, data: {} }, secret: env.WEBHOOK_SECRET }),
-    );
+    const resp = await SELF.fetch(new Request("http://localhost", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Webhook-Secret": env.WEBHOOK_SECRET,
+      },
+      body: JSON.stringify({ source: {}, data: {} }),
+    }));
     expect(resp.status).toBe(400);
   });
 
-  it("processes real Notion payload and returns 200 or 502", async () => {
-    // Telegram API won't be available in tests, so we expect either:
-    // - 200 if fetch is somehow mocked/succeeds
-    // - 502 if both Telegram sends fail (expected in test env)
-    const resp = await SELF.fetch(
-      makeRequest({ body: REAL_PAYLOAD, secret: env.WEBHOOK_SECRET }),
-    );
-    // In test environment without real Telegram, both sends will fail → 502
+  it("processes real payload (returns 200 or 502 depending on Telegram)", async () => {
+    const resp = await SELF.fetch(new Request("http://localhost", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Webhook-Secret": env.WEBHOOK_SECRET,
+      },
+      body: JSON.stringify(REAL_PAYLOAD),
+    }));
+    // 200 if Telegram succeeds, 502 if it fails (test env)
     expect([200, 502]).toContain(resp.status);
   });
 });
